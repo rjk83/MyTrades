@@ -4155,25 +4155,49 @@ pre_out     = health.get("pre_filtered_out", 0)
 deep_sc     = health.get("deep_scanned",     0)
 
 # ── Capital Summary Box ───────────────────────────────────────────────────────
-# Total  = configured max trades × USDT per trade  (maximum deployable capital)
-# Invested = sum of collateral in currently-open trades
-# Remaining = Total − Invested
+# When Auto-Trading is ON and API is connected:
+#   Total    = live OKX account equity (totalEq) fetched from /api/v5/account/balance
+#   Invested = sum of collateral in currently-open trades (from signal log)
+#   Remaining = Total − Invested
+# When Auto-Trading is OFF (or API unreachable):
+#   Total    = max_open_trades × trade_usdt_amount  (config-based estimate)
 _cap_usdt_per_trade = float(_snap_cfg.get("trade_usdt_amount", 10) or 10)
 _cap_max_trades     = max(1, int(_snap_cfg.get("max_open_trades", 15)))
-_cap_total          = _cap_usdt_per_trade * _cap_max_trades
 _cap_invested       = sum(
     float(s.get("trade_usdt", _cap_usdt_per_trade) or _cap_usdt_per_trade)
     for s in signals if s.get("status") == "open"
 )
-_cap_remaining      = max(0.0, _cap_total - _cap_invested)
-_invest_pct         = (_cap_invested / _cap_total * 100) if _cap_total > 0 else 0.0
+
+# Try to fetch live OKX balance when auto-trading is active and API is connected
+_cap_total        = _cap_usdt_per_trade * _cap_max_trades   # fallback
+_cap_total_source = f"config ({_cap_max_trades} trades × ${_cap_usdt_per_trade:,.0f})"
+_cap_fetch_error  = ""
+
+if _trade_on and _api_stat == "ok":
+    try:
+        _bal_resp = _trade_get("/api/v5/account/balance", {}, _snap_cfg)
+        if _bal_resp.get("code") == "0":
+            _total_eq = float(
+                (_bal_resp.get("data") or [{}])[0].get("totalEq", 0) or 0
+            )
+            if _total_eq > 0:
+                _cap_total        = _total_eq
+                _cap_total_source = "live OKX account equity"
+        else:
+            _cap_fetch_error = f"OKX {_bal_resp.get('code')}: {_bal_resp.get('msg','')}"
+    except Exception as _bal_exc:
+        _cap_fetch_error = str(_bal_exc)[:120]
+
+_cap_remaining = max(0.0, _cap_total - _cap_invested)
+_invest_pct    = (_cap_invested / _cap_total * 100) if _cap_total > 0 else 0.0
 
 with st.container(border=True):
     _bc1, _bc2, _bc3, _bc4 = st.columns(4)
     _bc1.metric(
         "💰 Total Capital",
         f"${_cap_total:,.2f}",
-        help=f"Max deployable capital = {_cap_max_trades} trades × ${_cap_usdt_per_trade:,.0f} USDT each"
+        help=f"Source: {_cap_total_source}"
+             + (f"\n\n⚠️ Balance fetch error: {_cap_fetch_error}" if _cap_fetch_error else "")
     )
     _bc2.metric(
         "📈 Invested",
