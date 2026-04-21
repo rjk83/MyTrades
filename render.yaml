@@ -1,5 +1,5 @@
 services:
-  - type: web
+  - type: we
     name: binance-futures-scanner
     env: python
     plan: starter          # $7/month — never sleeps (free tier sleeps after 15 min)
